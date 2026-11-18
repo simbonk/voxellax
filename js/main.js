@@ -127,7 +127,8 @@ function runSync() {
   if (!a || !b) {
     state.offset = 0;
     st.className = 'status warn';
-    st.textContent = 'Could not read the sound from both videos, so they start lined up at 0 s. Use the buttons to nudge, then preview.';
+    const why = state.audioErr.filter(Boolean).map((e) => e.message || String(e)).join(' / ');
+    st.textContent = `Could not read the sound from both videos, so they start lined up at 0 s. Use the buttons to nudge, then preview.${why ? ` (Details: ${why})` : ''}`;
     updateOffset();
     return;
   }
