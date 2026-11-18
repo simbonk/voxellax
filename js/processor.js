@@ -20,7 +20,11 @@ export const DETAIL = {
 const IPD_CM = 6.3;
 const LONG_SIDE_HALF_FOV = (35 * Math.PI) / 180; // typical phone/tablet selfie camera
 const DEFAULT_FACE_CM = 40;
-const MAX_REL_DEPTH = 4; // background clamp, in multiples of the face distance
+const MAX_REL_DEPTH = 8; // background clamp, in multiples of the face distance
+// Depth Anything predicts inverse depth only up to scale *and shift*. We pick the
+// shift so the farthest few percent of the frame land at FAR_REL x the face
+// distance (a room wall behind a selfie), instead of all piling up at infinity.
+const FAR_REL = 5;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -209,11 +213,15 @@ class ViewProcessor {
     }
     if (!(dRef > 0)) dRef = Math.max(1e-6, percentile(dm.data, 0.99));
 
+    const dFar = percentile(dm.data, 0.02);
+    let dInf = (FAR_REL * dFar - dRef) / (FAR_REL - 1);
+    dInf = Math.min(dInf, dFar - 0.05 * Math.abs(dRef - dFar) - 1e-6);
+    const span = dRef - dInf;
     const rel = new Float32Array(this.N);
     for (let y = 0; y < this.gh; y++) {
       for (let x = 0; x < this.gw; x++) {
         const d = sample((x + 0.5) / this.gw, (y + 0.5) / this.gh);
-        rel[y * this.gw + x] = Math.min(MAX_REL_DEPTH, dRef / Math.max(d, dRef * 0.05));
+        rel[y * this.gw + x] = Math.min(MAX_REL_DEPTH, span / Math.max(d - dInf, span / MAX_REL_DEPTH));
       }
     }
     this.rel.set(edgeFilter(rel, this.gw, this.gh), f * this.N);
@@ -452,7 +460,7 @@ function drawPreview(canvas, vp, rel, gpx) {
       img.data[o1 + 1] = gpx[i * 4 + 1];
       img.data[o1 + 2] = gpx[i * 4 + 2];
       img.data[o1 + 3] = 255;
-      const g = rel[i] > 0 ? Math.max(0, Math.min(255, 255 - (rel[i] - 0.5) * 120)) : 0;
+      const g = rel[i] > 0 ? Math.max(0, Math.min(255, 255 * (1 - Math.log(rel[i] / 0.6) / Math.log(MAX_REL_DEPTH / 0.6)))) : 0;
       img.data[o2] = g;
       img.data[o2 + 1] = g * 0.8;
       img.data[o2 + 2] = 255 - g * 0.6;

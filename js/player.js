@@ -39,7 +39,7 @@ void main() {
   float worldSize = z * uCell * uScale * uSizeMul;
   gl_PointSize = clamp(worldSize * uPix / max(-v.z, 0.01), 1.0, 96.0);
   vColor = aColor;
-  vShade = clamp(1.0 + d.z / (uCut * 1.5), 0.45, 1.0);
+  vShade = clamp(1.0 + d.z / (uCut * 2.5), 0.6, 1.0);
 }`;
 
 const FS = `#version 300 es
@@ -50,7 +50,7 @@ out vec4 outColor;
 void main() {
   vec2 pc = abs(gl_PointCoord - 0.5);
   float edge = max(pc.x, pc.y);
-  float bevel = edge > 0.40 ? 0.78 : 1.0;
+  float bevel = edge > 0.40 ? 0.85 : 1.0;
   float light = 1.0 + 0.10 * (0.5 - gl_PointCoord.y);
   outColor = vec4(vColor * vShade * bevel * light, 1.0);
 }`;
@@ -86,7 +86,7 @@ export class VoxelPlayer {
       gain: 1.6,
       depthK: 1.0,
       pointSize: 1.15,
-      cut: 60,
+      cut: 250,
       zoom: 1.0,
     };
     this.clip = null;
