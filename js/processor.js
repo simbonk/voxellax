@@ -7,7 +7,7 @@
 // fitting a similarity transform between the face landmarks seen in both views.
 import { DepthEstimator } from './depth.js';
 import { createFaceLandmarker, eyePoints, ALIGN_LANDMARKS } from './face.js';
-import { alignSimilarity, applySim, similarityToMat4, identity, median, percentile } from './math.js';
+import { alignSimilarity, applySim, similarityToMat4, identity, multiply, scaling, median, percentile } from './math.js';
 import { DEPTH_SCALE } from './format.js';
 import { SYNC_RATE } from './audiosync.js';
 
@@ -198,7 +198,9 @@ class ViewProcessor {
       ALIGN_LANDMARKS.forEach((idx, k) => {
         uv[k * 2] = lm[idx].x;
         uv[k * 2 + 1] = lm[idx].y;
-        rl[k] = dRef / Math.max(ds[k], dRef * 0.1);
+        // MediaPipe's own landmark depth (same scale as x, i.e. image width):
+        // steadier face geometry for the alignment than the depth map.
+        rl[k] = 1 + lm[idx].z * 2 * this.tanX;
       });
       this.lmUV[f] = uv;
       this.lmRel[f] = rl;
@@ -268,32 +270,50 @@ class ViewProcessor {
 }
 
 // Align view B onto view A frame by frame, then smooth over time.
+function robustFit(pb, pa) {
+  let fit = alignSimilarity(pb, pa);
+  // One round of outlier rejection (bad depth at some landmarks).
+  const res = pb.map((p, i) => {
+    const q = applySim(fit.s, fit.q, fit.t, p);
+    return Math.hypot(q[0] - pa[i][0], q[1] - pa[i][1], q[2] - pa[i][2]);
+  });
+  const cut = percentile(res, 0.75);
+  const w = res.map((r) => (r <= cut ? 1 : 0));
+  fit = alignSimilarity(pb, pa, w);
+  let se = 0, k = 0;
+  pb.forEach((p, i) => {
+    if (!w[i]) return;
+    const q = applySim(fit.s, fit.q, fit.t, p);
+    se += (q[0] - pa[i][0]) ** 2 + (q[1] - pa[i][1]) ** 2 + (q[2] - pa[i][2]) ** 2;
+    k++;
+  });
+  return { fit, ratio: Math.sqrt(se / Math.max(1, k)) / IPD_CM };
+}
+
+const mirrorX = (p) => [-p[0], p[1], p[2]];
+
+// Align view B onto view A frame by frame, then smooth over time. One camera may
+// save mirrored selfies and the other not, so a mirrored fit is tried too.
 function alignViews(A, B, F) {
-  const fits = new Array(F).fill(null);
-  const ratios = [];
+  const normal = new Array(F).fill(null);
+  const mirrored = new Array(F).fill(null);
   for (let f = 0; f < F; f++) {
     const pa = A.lm3d[f], pb = B.lm3d[f];
     if (!pa || !pb) continue;
-    let fit = alignSimilarity(pb, pa);
-    // One round of outlier rejection (bad depth at some landmarks).
-    const res = pb.map((p, i) => {
-      const q = applySim(fit.s, fit.q, fit.t, p);
-      return Math.hypot(q[0] - pa[i][0], q[1] - pa[i][1], q[2] - pa[i][2]);
-    });
-    const cut = percentile(res, 0.75);
-    const w = res.map((r) => (r <= cut ? 1 : 0));
-    fit = alignSimilarity(pb, pa, w);
-    let se = 0, k = 0;
-    pb.forEach((p, i) => {
-      if (!w[i]) return;
-      const q = applySim(fit.s, fit.q, fit.t, p);
-      se += (q[0] - pa[i][0]) ** 2 + (q[1] - pa[i][1]) ** 2 + (q[2] - pa[i][2]) ** 2;
-      k++;
-    });
-    const rms = Math.sqrt(se / Math.max(1, k));
-    const ratio = rms / IPD_CM;
-    if (fit.s < 0.6 || fit.s > 1.6 || ratio > 0.45) continue;
-    fit.s = Math.min(1.4, Math.max(0.7, fit.s));
+    normal[f] = robustFit(pb, pa);
+    mirrored[f] = robustFit(pb.map(mirrorX), pa);
+  }
+  const med = (arr) => median(arr.filter(Boolean).map((x) => x.ratio));
+  const useMirror = med(mirrored) < med(normal) * 0.8;
+  const chosen = useMirror ? mirrored : normal;
+  const fits = new Array(F).fill(null);
+  const ratios = [];
+  for (let f = 0; f < F; f++) {
+    const c = chosen[f];
+    if (!c) continue;
+    const { fit, ratio } = c;
+    // Scale absorbs the unknown difference in the two cameras' fields of view.
+    if (fit.s < 0.4 || fit.s > 2.5 || ratio > 0.45) continue;
     fits[f] = fit;
     ratios.push(ratio);
   }
@@ -302,7 +322,10 @@ function alignViews(A, B, F) {
     framesWithBothFaces: A.lm3d.filter((p, f) => p && B.lm3d[f]).length,
     alignedFrames: valid.length,
     frames: F,
+    mirrored: useMirror,
     medianResidualCm: ratios.length ? +(median(ratios) * IPD_CM).toFixed(2) : null,
+    medianFitResidualCm: chosen.some(Boolean) ? +(med(chosen) * IPD_CM).toFixed(2) : null,
+    medianScale: chosen.some(Boolean) ? +median(chosen.filter(Boolean).map((x) => x.fit.s)).toFixed(3) : null,
   };
   if (!valid.length) return { ok: false, info };
   const nearest = (i) => valid.reduce((b, j) => (Math.abs(j - i) < Math.abs(b - i) ? j : b), valid[0]);
@@ -325,7 +348,8 @@ function alignViews(A, B, F) {
       n++;
     }
     const qn = Math.hypot(...q) || 1;
-    B.xform.set(similarityToMat4(s / n, q.map((x) => x / qn), t.map((x) => x / n)), f * 16);
+    const sim = similarityToMat4(s / n, q.map((x) => x / qn), t.map((x) => x / n));
+    B.xform.set(useMirror ? multiply(sim, scaling(-1, 1, 1)) : sim, f * 16);
   }
   const ok = valid.length >= 0.5 * F && median(ratios) < 0.3;
   return { ok, info };

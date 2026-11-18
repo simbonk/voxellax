@@ -327,7 +327,7 @@ export class VoxelPlayer {
 
     const s = this.settings;
     const minWH = Math.min(W, H);
-    const scale = (s.zoom * 0.8 * minWH) / 20;
+    const scale = (s.zoom * 0.8 * minWH) / 45; // frame head and shoulders
     const showBoth = s.views === 'both' && this.gpuViews.length === 2;
     const baseCenter = showBoth ? this.clip.views[0].center : null;
 

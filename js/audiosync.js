@@ -3,28 +3,80 @@
 // GCC-PHAT (phase-transform weighted cross-correlation), which is robust to the
 // two microphones sounding different.
 
+import { extractAac, decodeAacWebCodecs } from './mp4audio.js';
+
 export const SYNC_RATE = 16000; // decode rate; also the rate of exported audio
 const CORR_RATE = 4000; // rate used for the correlation itself
 
-export async function decodeAudio(file) {
-  const buf = await file.arrayBuffer();
+function contextDecode(arrayBuffer) {
   let ctx;
   try {
     ctx = new OfflineAudioContext(1, 1, SYNC_RATE);
   } catch {
     ctx = new OfflineAudioContext(1, 1, 44100); // older Safari: fixed rates only
   }
-  const audio = await new Promise((resolve, reject) => {
-    const p = ctx.decodeAudioData(buf, resolve, reject);
+  return new Promise((resolve, reject) => {
+    const p = ctx.decodeAudioData(arrayBuffer, resolve, reject);
     if (p && p.then) p.then(resolve, reject);
+  }).then((audio) => {
+    const n = audio.length;
+    const mono = new Float32Array(n);
+    for (let c = 0; c < audio.numberOfChannels; c++) {
+      const ch = audio.getChannelData(c);
+      for (let i = 0; i < n; i++) mono[i] += ch[i] / audio.numberOfChannels;
+    }
+    return { pcm: mono, sampleRate: audio.sampleRate };
   });
-  const n = audio.length;
-  const mono = new Float32Array(n);
-  for (let c = 0; c < audio.numberOfChannels; c++) {
-    const ch = audio.getChannelData(c);
-    for (let i = 0; i < n; i++) mono[i] += ch[i] / audio.numberOfChannels;
+}
+
+// Apply the track's edit list (priming trim + leading delay), then resample.
+function finishTrack(pcm, rate, info) {
+  const trim = Math.min(pcm.length, Math.max(0, Math.round((info?.startTrim || 0) * rate)));
+  const pad = Math.max(0, Math.round((info?.leadPad || 0) * rate));
+  const out = new Float32Array(pcm.length - trim + pad);
+  out.set(pcm.subarray(trim), pad);
+  return resample(out, rate, SYNC_RATE);
+}
+
+/**
+ * Decodes a video file's soundtrack to mono Float32 at SYNC_RATE. Tries, in order:
+ * the AAC track demuxed to ADTS, the same frames through WebCodecs, then the
+ * whole file. Sets decodeAudio.lastMethod for diagnostics.
+ */
+export async function decodeAudio(file) {
+  const buf = await file.arrayBuffer();
+  const errors = [];
+  let aac = null;
+  try {
+    aac = extractAac(buf);
+    if (!aac) errors.push('no AAC track found');
+  } catch (e) {
+    errors.push(`demux: ${e.message}`);
   }
-  return resample(mono, audio.sampleRate, SYNC_RATE);
+  if (aac) {
+    try {
+      const { pcm, sampleRate } = await contextDecode(aac.adts.buffer);
+      decodeAudio.lastMethod = 'aac-track';
+      return finishTrack(pcm, sampleRate, aac);
+    } catch (e) {
+      errors.push(`adts: ${e?.message || e}`);
+    }
+    try {
+      const { pcm, sampleRate } = await decodeAacWebCodecs(aac);
+      decodeAudio.lastMethod = 'webcodecs';
+      return finishTrack(pcm, sampleRate, aac);
+    } catch (e) {
+      errors.push(`webcodecs: ${e?.message || e}`);
+    }
+  }
+  try {
+    const { pcm, sampleRate } = await contextDecode(buf);
+    decodeAudio.lastMethod = 'whole-file';
+    return resample(pcm, sampleRate, SYNC_RATE);
+  } catch (e) {
+    errors.push(`whole file: ${e?.message || e}`);
+  }
+  throw new Error(`Could not decode audio (${errors.join('; ')})`);
 }
 
 // Box-filtered linear resampler (good enough for sync and 16 kHz speech).
