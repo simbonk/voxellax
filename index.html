@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b12">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Voxellax</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='5' width='6' height='6' fill='%2370e0ff'/><rect x='7' y='3' width='6' height='6' fill='%23ff7ad9'/><rect x='5' y='9' width='6' height='6' fill='%23ffd166'/></svg>">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Home -->
+  <section id="home" class="screen">
+    <div class="wrap">
+      <h1 class="logo">Voxellax</h1>
+      <p class="lede">Two selfie videos in, a chunky 3D voxel video out. Play it back with your head moving the view.</p>
+      <div class="stack">
+        <button id="btn-new" class="primary big">Make a new voxel video</button>
+        <label class="button big">
+          Open a saved .voxl file
+          <input id="open-file" type="file" hidden>
+        </label>
+      </div>
+      <details class="howto">
+        <summary>How to record</summary>
+        <ol>
+          <li>Start a selfie video on the tablet held in your left hand.</li>
+          <li>Start a selfie video on the phone held in your right hand.</li>
+          <li>Say hello, smile, move things around. Keep your face in both shots.</li>
+          <li>Stop both videos and upload them here. The sound is used to line them up.</li>
+        </ol>
+        <p class="muted">Everything is processed on this device. Nothing is uploaded to a server. Results are rough and noisy: depth is guessed by an AI model from each frame.</p>
+      </details>
+    </div>
+  </section>
+
+  <!-- Create -->
+  <section id="create" class="screen" hidden>
+    <div class="wrap">
+      <header class="bar">
+        <button class="ghost" data-go="home">‹ Back</button>
+        <h2>New voxel video</h2>
+      </header>
+
+      <div class="cards">
+        <div class="card" data-slot="0">
+          <div class="card-title">Left hand <span class="muted">(e.g. iPad)</span></div>
+          <div class="vidbox"><span class="placeholder">No video yet</span></div>
+          <label class="button">Choose video<input type="file" accept="video/*,.mov,.mp4,.m4v" hidden></label>
+          <div class="meta muted"></div>
+        </div>
+        <div class="card" data-slot="1">
+          <div class="card-title">Right hand <span class="muted">(e.g. iPhone)</span></div>
+          <div class="vidbox"><span class="placeholder">No video yet</span></div>
+          <label class="button">Choose video<input type="file" accept="video/*,.mov,.mp4,.m4v" hidden></label>
+          <div class="meta muted"></div>
+        </div>
+      </div>
+
+      <div id="sync-panel" class="panel" hidden>
+        <h3>1 · Line up the sound</h3>
+        <p id="sync-status" class="status">Waiting for both videos…</p>
+        <div class="row wrapline">
+          <button class="small" data-nudge="-0.1">−0.1 s</button>
+          <button class="small" data-nudge="-0.0333">−1 frame</button>
+          <span id="offset-label" class="mono">0.000 s</span>
+          <button class="small" data-nudge="0.0333">+1 frame</button>
+          <button class="small" data-nudge="0.1">+0.1 s</button>
+        </div>
+        <button id="btn-preview-sync" class="small">▶ Preview both in sync</button>
+        <div id="preview-pair" class="pair"></div>
+      </div>
+
+      <div id="clip-panel" class="panel" hidden>
+        <h3>2 · Choose the moment</h3>
+        <label class="field">Start <span id="start-label" class="mono"></span>
+          <input id="start" type="range" min="0" max="1" step="0.1" value="0"></label>
+        <label class="field">Length <span id="length-label" class="mono"></span>
+          <input id="length" type="range" min="1" max="20" step="0.5" value="6"></label>
+        <div class="grid2">
+          <label class="field">Frames per second
+            <select id="fps">
+              <option value="6">6</option>
+              <option value="8">8</option>
+              <option value="10" selected>10</option>
+              <option value="12">12</option>
+              <option value="15">15</option>
+            </select></label>
+          <label class="field">Detail
+            <select id="detail">
+              <option value="low">Low (fastest)</option>
+              <option value="medium" selected>Medium</option>
+              <option value="high">High (slow)</option>
+            </select></label>
+        </div>
+        <label class="field">Cameras
+          <select id="views">
+            <option value="both" selected>Both, merged if possible</option>
+            <option value="0">Left video only</option>
+            <option value="1">Right video only</option>
+          </select></label>
+        <p id="estimate" class="muted"></p>
+        <button id="btn-process" class="primary big">Convert to 3D</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Processing -->
+  <section id="process" class="screen" hidden>
+    <div class="wrap">
+      <h2>Converting…</h2>
+      <p id="proc-stage" class="status">Starting…</p>
+      <div class="progress"><div id="proc-bar"></div></div>
+      <p id="proc-eta" class="muted"></p>
+      <canvas id="proc-preview"></canvas>
+      <div id="proc-videos" class="pair small-vids"></div>
+      <p class="muted">Keep this tab open and the screen on. The first run downloads the depth model (about 25–50 MB); later runs use the cached copy.</p>
+      <button id="btn-cancel" class="ghost">Cancel</button>
+    </div>
+  </section>
+
+  <!-- Player -->
+  <section id="player" class="screen" hidden>
+    <canvas id="gl"></canvas>
+    <div id="hud">
+      <div class="hud-top">
+        <button class="ghost" id="btn-home">‹</button>
+        <div class="seg" id="mode-seg">
+          <button data-mode="head">Head</button>
+          <button data-mode="auto" class="on">Auto</button>
+          <button data-mode="drag">Drag</button>
+        </div>
+        <button class="ghost" id="btn-settings">⚙︎</button>
+      </div>
+      <div id="hud-msg" class="hud-msg" hidden></div>
+      <div class="hud-bottom">
+        <button id="btn-play" class="primary">▶ Play</button>
+        <div class="seg" id="views-seg" hidden>
+          <button data-views="both">Both</button>
+          <button data-views="0">Left</button>
+          <button data-views="1">Right</button>
+        </div>
+        <button id="btn-save">Save</button>
+      </div>
+      <div id="settings" class="sheet" hidden>
+        <label class="field">Parallax strength <input data-set="gain" type="range" min="0.5" max="4" step="0.1" value="1.6"></label>
+        <label class="field">Depth <input data-set="depthK" type="range" min="0.2" max="3" step="0.05" value="1"></label>
+        <label class="field">Voxel size <input data-set="pointSize" type="range" min="0.5" max="3" step="0.05" value="1.15"></label>
+        <label class="field">Background cut <input data-set="cut" type="range" min="5" max="200" step="1" value="60"></label>
+        <label class="field">Zoom <input data-set="zoom" type="range" min="0.3" max="3" step="0.05" value="1"></label>
+        <div class="row">
+          <button id="btn-recenter" class="small">Recenter head</button>
+          <button id="btn-close-settings" class="small">Done</button>
+        </div>
+        <p id="clip-info" class="muted"></p>
+      </div>
+    </div>
+  </section>
+
+  <div id="toast" hidden></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
